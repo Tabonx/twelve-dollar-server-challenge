@@ -1,6 +1,4 @@
 // Byte ranges and the output buffer every response is written into.
-//
-// Nothing here uses Foundation or existentials, so it builds in Embedded mode.
 
 import CShim
 

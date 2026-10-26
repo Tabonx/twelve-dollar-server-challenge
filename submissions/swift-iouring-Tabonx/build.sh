@@ -54,9 +54,9 @@ rm -f "$OUT"/pgo/train.db*
 
 "$CLANG" -O2 -ISources/CShim/include -c Sources/CShim/shim.c -o "$OUT/shim.o"
 "$CLANG" -O2 -I"$URING/include" -ISources/CUring/include -c Sources/CUring/tu.c -o "$OUT/tu.o"
-"$BIN/swiftc" -wmo -Ounchecked -enforce-exclusivity=unchecked -parse-as-library -swift-version 6 -module-name Turbo \
+"$BIN/swiftc" -wmo -Ounchecked -enforce-exclusivity=unchecked -parse-as-library -swift-version 6 -module-name Server \
     -static-stdlib \
     -I Sources/CSQLite/include -I Sources/CShim/include -I Sources/CUring/include \
     -Xcc -ISources/CSQLite/include -Xcc -ISources/CShim/include -Xcc -ISources/CUring/include -Xcc -I"$URING/include" \
-    Sources/Turbo/*.swift "$OUT/shim.o" "$OUT/tu.o" "$OUT/sqlite3.o" "$URING/lib/liburing.a" -o bin/server
+    Sources/Server/*.swift "$OUT/shim.o" "$OUT/tu.o" "$OUT/sqlite3.o" "$URING/lib/liburing.a" -o bin/server
 echo "built bin/server"

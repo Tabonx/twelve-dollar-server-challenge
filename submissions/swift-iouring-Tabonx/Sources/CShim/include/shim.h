@@ -1,4 +1,4 @@
-// System headers and small wrappers for macros and errno, usable from Embedded Swift.
+// System headers and small wrappers for macros and errno.
 #ifndef SV_SHIM_H
 #define SV_SHIM_H
 #include <errno.h>
@@ -31,6 +31,12 @@ static inline int64_t sv_monotonic_s(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (int64_t)t.tv_sec;
+}
+
+static inline int64_t sv_monotonic_ns(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
 }
 
 static inline const char *sv_getenv(const char *name) { return getenv(name); }

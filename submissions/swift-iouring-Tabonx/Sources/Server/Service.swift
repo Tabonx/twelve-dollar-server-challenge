@@ -1,5 +1,5 @@
-// Routing and the five endpoints. Transports hand in a parsed request and get the JSON body back,
-// or call `appendHTTPResponse` for the full HTTP/1.1 response bytes.
+// Routing and the five endpoints. The server hands in a parsed request and gets back the JSON body,
+// or calls `appendHTTPResponse` for the full HTTP/1.1 response bytes.
 
 import CShim
 
@@ -7,7 +7,7 @@ public enum Method: UInt8 {
     case get, post, other
 }
 
-/// A parsed request. Every view points into the transport's receive buffer.
+/// A parsed request. Every view points into the receive buffer.
 public struct Request {
     public var method: Method
     /// Path without the query string.
@@ -48,6 +48,11 @@ public final class FeedService {
 
     /// Commits the batch. False means it was rolled back and every response in it must become a 500.
     public func endBatch() -> Bool { db.commitTransaction() }
+
+    /// Whether a WAL checkpoint is due. Read without the lock as a hint; run it under the lock.
+    public var checkpointDue: Bool { db.checkpointDue }
+
+    public func checkpointIfDue() { db.checkpointIfDue() }
 
     // MARK: Requests
 

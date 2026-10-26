@@ -51,7 +51,7 @@ struct Main {
             _ = write(2, error.base, error.count)
             fail(": cannot open the database")
         }
-        if tu_probe() == 0 || environment("TURBO_EPOLL") != nil {
+        if tu_probe() == 0 || environment("SERVER_FORCE_EPOLL") != nil {
             _ = write(2, "io_uring unavailable, using epoll\n", 34)
             guard var server = EpollServer(service: service, host: host, port: port) else { fail("cannot listen") }
             server.run()
@@ -62,7 +62,7 @@ struct Main {
         let listener = sv_listen(host, port, 65535)
         guard listener >= 0 else { fail("cannot listen") }
         var rings = 8
-        if let r = environment("TURBO_RINGS") { rings = max(1, Int(atoi(r))) }
+        if let r = environment("SERVER_RINGS") { rings = max(1, Int(atoi(r))) }
 
         let config = WorkerConfig(service: service, listener: listener, slots: slots)
         for _ in 1..<rings {
@@ -74,6 +74,6 @@ struct Main {
 #else
 @main
 struct Main {
-    static func main() { fatalError("the io_uring variant runs on Linux only") }
+    static func main() { fatalError("this server runs on Linux only") }
 }
 #endif

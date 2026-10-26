@@ -105,8 +105,9 @@ final class Worker {
             tu_buffer_put(br, bufferMemory + Int(bid) &* bufferSize, UInt32(bufferSize), UInt16(bid), bufferMask, bid)
         }
         tu_buffer_commit(br, bufferCount)
-        table = .allocate(capacity: slots)
-        table.initialize(repeating: Slot(), count: slots)
+        // A zeroed Slot is the default Slot(), so calloc gives a valid table whose pages the kernel
+        // only maps when a connection lands in them. Rings that never fill cost almost nothing.
+        table = calloc(slots, MemoryLayout<Slot>.stride).unsafelyUnwrapped.bindMemory(to: Slot.self, capacity: slots)
         responses = .allocate(capacity: maxCompletions)
         cqes = .allocate(capacity: maxCompletions)
         arenas.append(Arena())
@@ -126,40 +127,17 @@ final class Worker {
         tu_cancel(ring, tag(.accept, generation: acceptGeneration), tag(.close))
     }
 
-    /// TURBO_STATS=1: a line per ring every few seconds on stderr.
-    var statsAt: Int64 = 0
-    let stats = sv_getenv("TURBO_STATS") != nil
-    var errorsSeen = 0
-
-    func printStats() {
-        var line = OutBuffer(capacity: 128)
-        line.append("ring open=")
-        line.appendInt(Int64(openCount))
-        line.append(" accepting=")
-        line.append(accepting ? "1" : "0")
-        line.append(" errors=")
-        line.appendInt(Int64(errorsSeen))
-        line.append(" rearm=")
-        line.appendInt(Int64(rearm.count))
-        line.append(UInt8(ascii: "\n"))
-        _ = write(2, line.base, line.count)
-    }
-
+    /// With connections open, wait until 32 completions are ready or 250 µs pass, so one wakeup handles
+    /// a batch. With none open, block until the first completion.
     func run() -> Never {
-        var lastBatch = 0
         while true {
-            if stats {
-                let t = sv_monotonic_s()
-                if t - statsAt >= 5 { statsAt = t; printStats() }
-            }
-            // Under load, wait for a fuller batch (or 250 µs); when quiet, wake on the first completion.
-            if lastBatch >= 16 {
+            if openCount > 0 {
                 _ = tu_wait(ring, 32, 250)
             } else {
                 _ = tu_wait(ring, 1, 0)
             }
-            lastBatch = Int(io_uring_peek_batch_cqe(ring, cqes, UInt32(maxCompletions)))
-            if lastBatch > 0 { process(lastBatch) }
+            let n = Int(io_uring_peek_batch_cqe(ring, cqes, UInt32(maxCompletions)))
+            if n > 0 { process(n) }
         }
     }
 
@@ -192,7 +170,7 @@ final class Worker {
             let generation = UInt16(truncatingIfNeeded: data >> 8)
             switch data & 0xFF {
             case Op.accept.rawValue:
-                if res >= 0 { opened(UInt32(res)) } else if res != -ECANCELED { errorsSeen &+= 1 }
+                if res >= 0 { opened(UInt32(res)) }
                 if flags & UInt32(TU_CQE_F_MORE) == 0 && generation == acceptGeneration { accepting = false }
             case Op.recv.rawValue:
                 received(slot, generation, res, flags, arena)
@@ -212,13 +190,36 @@ final class Worker {
             send(r.slot, arena.out.base + r.start, r.end &- r.start, arenaIndex: UInt16(arenaIndex), close: r.close)
         }
         io_uring_cq_advance(ring, UInt32(n))
+        let returned = Int(buffersReturned)
         if buffersReturned > 0 {
             tu_buffer_commit(bufferRing, buffersReturned)
             buffersReturned = 0
         }
         if !rearm.isEmpty {
-            for s in rearm where table[Int(s)].open && !table[Int(s)].receiving { armReceive(s) }
-            rearm.removeAll(keepingCapacity: true)
+            // Re-arm receives that ran out of buffers, but only about as many as there are buffers
+            // to receive into: re-arming them all at once under overload just repeats ENOBUFS.
+            let budget = min(max(returned, 32), 2048)
+            var armed = 0
+            var kept = 0
+            for i in 0..<rearm.count {
+                let s = rearm[i]
+                guard table[Int(s)].open && !table[Int(s)].receiving else { continue }
+                if armed < budget {
+                    armReceive(s)
+                    armed &+= 1
+                } else {
+                    rearm[kept] = s
+                    kept &+= 1
+                }
+            }
+            rearm.removeLast(rearm.count &- kept)
+        }
+        // Responses are queued; submit them, then run a due checkpoint behind them.
+        if service.checkpointDue {
+            _ = io_uring_submit(ring)
+            tu_lock()
+            service.checkpointIfDue()
+            tu_unlock()
         }
         if accepting && openCount >= acceptStop {
             stopAccepting()
@@ -267,7 +268,6 @@ final class Worker {
             if res == -ENOBUFS {
                 rearm.append(slot)
             } else {
-                if res < 0 { errorsSeen &+= 1 }
                 closeSlot(slot)
             }
             return

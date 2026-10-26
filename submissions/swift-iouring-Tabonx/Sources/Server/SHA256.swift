@@ -1,5 +1,5 @@
-// SHA-256 and HMAC-SHA256 (FIPS 180-4, RFC 2104). swift-crypto doesn't build in Embedded mode,
-// and the HMAC pads only need hashing once per process, which a library API doesn't expose.
+// SHA-256 and HMAC-SHA256 (FIPS 180-4, RFC 2104). Written here so the HMAC pads are hashed once per
+// process, which a library API doesn't expose.
 
 private let roundConstants: [UInt32] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,

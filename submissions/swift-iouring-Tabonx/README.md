@@ -30,8 +30,13 @@ fails, it builds SQLite without a profile.
 - **Zero-copy responses.** Each batch writes its responses into an arena, headers in front of each
   body. Sends point straight into it, and the arena is reused only after its last send completes.
 - **SQLite.** One connection with `locking_mode=EXCLUSIVE` and WAL, `synchronous=NORMAL`, a 128 MiB page
-  cache, no mmap, `wal_autocheckpoint=0`, and a passive checkpoint after a commit once the WAL passes
-  4,096 frames.
+  cache, no mmap and `wal_autocheckpoint=0`. A commit only marks a checkpoint as due once the WAL
+  passes 1,024 frames. The ring runs it after it has submitted the batch's sends, so the checkpoint
+  never delays committed responses. Checkpointing at 1,024 frames instead of 4,096 cost about 7 % less
+  CPU at 200,000 users, because every page read searches the WAL index, which grows with the WAL.
+- **Overload.** After receives run out of buffers, a ring re-arms only about as many as it has
+  buffers to give back, so an overloaded ring doesn't spin on ENOBUFS. Slot tables come from `calloc`,
+  so rings that never fill cost almost no memory.
 - **The feed.** It reads the newest 20 ids from `posts_created_at_id_idx`. When they are contiguous,
   one range scan of `likes_post_id_idx` is counted row by row (about 7 % cheaper than `GROUP BY` in
   SQLite) and one rowid range scan returns the rows in feed order. Otherwise the reference query runs.
@@ -60,20 +65,28 @@ row comes from an earlier session on the same machine:
 At 4,096 busy connections the Go entry batches better. With think-time users, where every connection
 is mostly idle, the two used about the same CPU: 25 % for Go and 22 % for this entry at 60,000 users.
 
-Think-time users, using a C reimplementation of `bench/load.js` (60 s ramp, 120 s hold, the
-challenge's pass criteria):
+Think-time users, using a C reimplementation of `bench/load.js` that measures latency like k6's
+`http_req_duration` (server and clients on the VM's loopback, 40 s ramp, 60 s hold, the challenge's pass
+criteria). Each row is one run; repeated runs of the same configuration varied by up to 5x in p99.
 
-| Users | req/s | p95 | p99 | errors | server CPU | server memory peak |
-|---:|---:|---:|---:|---:|---:|---:|
-| 100,000 | 10,582 | 9.7 ms | 65.5 ms | 0 | 36 % | 289 MB |
-| 200,000 | 21,295 | 16.4 ms | 39.0 ms | 0 | 52 % | 564 MB |
+| Users | Server | req/s | p95 | p99 | server CPU | memory peak | result |
+|---:|---|---:|---:|---:|---:|---:|---|
+| 200,000 | rust-epoll-scooter1337 | 21,289 | 8.2 ms | 27.6 ms | 39 % | 422 MB | pass |
+| 200,000 | this entry | 21,297 | 9.7 ms | 23.2 ms | 33 % | 459 MB | pass |
+| 300,000 | rust-epoll-scooter1337 | 31,609 | 65.5 ms | 155.9 ms | 77 % | 757 MB | pass |
+| 300,000 | this entry | 31,678 | 32.8 ms | 131.1 ms | 71 % | 774 MB | pass |
+| 360,000 | both | | | | 99 % | | fail (CPU) |
 
-At 260,000 and 300,000 users the run failed. The profile showed the shared kernel of the test VM
-dominating: conntrack and established-socket lookups across both client and server sockets. 150,000
-idle keep-alive connections cost 230 MB, and the process held 14 descriptors.
+Across four 300,000-user runs this entry's p99 was 131 to 882 ms; across three Rust runs it was 156 to
+882 ms. Both fail at 360,000 users on this VM, where the server and all clients share one kernel.
 
 The io_uring path was tested on arm64 Linux 6.10. Under x86_64 emulation (Rosetta), io_uring isn't
 available, so `test/run.sh` there passed 42/42 on the epoll fallback.
+
+## Switches for testing
+
+`start.sh` needs only the variables in SPEC.md. Two optional variables help with testing: `SERVER_RINGS`
+sets the number of rings (default 8), and `SERVER_FORCE_EPOLL=1` runs the epoll fallback.
 
 ## Layout
 
@@ -81,6 +94,6 @@ available, so `test/run.sh` there passed 42/42 on the epoll fallback.
 Sources/CSQLite/include/   module map and helpers for sqlite3.h (fetched by build.sh)
 Sources/CShim/             socket, epoll and rlimit setup in C
 Sources/CUring/            liburing helpers: SQE preparation, waits with timeout, threads and the mutex
-Sources/Turbo/             rings, epoll fallback, SQL, feed, routing, HTTP parsing, JSON, JWT, SHA-256
+Sources/Server/            rings, epoll fallback, SQL, feed, routing, HTTP parsing, JSON, JWT, SHA-256
 pgo/train.c                the SQLite training workload
 ```

@@ -1,4 +1,4 @@
-// Socket and epoll setup for the epoll variant. Kept in C so Swift never has to know the layout of
+// Socket and epoll setup. Kept in C so Swift never has to know the layout of
 // struct epoll_event (packed on x86_64) or the sockaddr dance.
 #define _GNU_SOURCE
 #include "shim.h"

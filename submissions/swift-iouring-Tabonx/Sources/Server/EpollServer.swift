@@ -4,8 +4,6 @@
 // request in place, answer them all inside one SQLite transaction, commit, and only then write the
 // responses. Reads inside the batch therefore never leak uncommitted data: if the commit fails, every
 // response of the batch becomes a 500.
-//
-// Builds as regular Swift and as Embedded Swift (no runtime, no Foundation).
 
 #if os(Linux)
 import CShim
@@ -133,6 +131,8 @@ struct EpollServer: ~Copyable {
             send(e.fd, outputArena.base + e.outputStart, e.outputEnd &- e.outputStart, close: e.close)
         }
 
+        // Commits only mark a checkpoint as due; run it after the responses are written.
+        service.checkpointIfDue()
         if acceptPending { acceptAll() }
     }
 

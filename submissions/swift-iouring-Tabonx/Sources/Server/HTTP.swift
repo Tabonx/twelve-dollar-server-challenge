@@ -1,5 +1,4 @@
-// HTTP/1.1 framing for the transports that don't bring their own: request parsing in place and
-// response headers written in front of the body.
+// HTTP/1.1 framing: request parsing in place and response headers written in front of the body.
 
 public enum ParseResult {
     /// Need more bytes.
